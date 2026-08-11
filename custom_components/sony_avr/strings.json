@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to your Sony receiver",
+        "description": "Enter the receiver's IP address. Make sure it is powered on, and that Settings > Network > Network Standby is enabled so it stays reachable in standby.",
+        "data": {
+          "host": "IP address",
+          "name": "Name",
+          "cers_port": "Registration port",
+          "ircc_port": "IRCC control port",
+          "dmr_port": "DLNA renderer port"
+        }
+      },
+      "pin": {
+        "title": "Enter the pairing PIN",
+        "description": "The receiver at {host} is showing a PIN on its display. Enter it here to finish pairing.",
+        "data": {
+          "pin": "PIN"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the receiver. Check the IP address and that it is powered on.",
+      "cannot_register": "The receiver refused the pairing request.",
+      "invalid_auth": "That PIN was not accepted. Try again."
+    },
+    "abort": {
+      "already_configured": "This receiver is already set up."
+    }
+  },
+  "services": {
+    "send_command": {
+      "name": "Send command",
+      "description": "Send a raw IRCC remote-control command to the receiver.",
+      "fields": {
+        "command": {
+          "name": "Command",
+          "description": "Name of the IRCC command, for example 'home' or 'display'."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "domain": "sony_avr",
+  "name": "Sony AVR (IRCC)",
+  "codeowners": ["@ben-meeker"],
+  "config_flow": true,
+  "documentation": "https://github.com/ben-meeker/ha-sony-avr",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/ben-meeker/ha-sony-avr/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

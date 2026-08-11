@@ -1,0 +1,36 @@
+send_command:
+  target:
+    entity:
+      integration: sony_avr
+      domain: media_player
+  fields:
+    command:
+      required: true
+      example: home
+      selector:
+        select:
+          custom_value: true
+          options:
+            - power_on
+            - power_off
+            - power_toggle
+            - sleep
+            - volume_up
+            - volume_down
+            - mute
+            - up
+            - down
+            - left
+            - right
+            - confirm
+            - home
+            - options
+            - return
+            - display
+            - play
+            - pause
+            - stop
+            - next
+            - prev
+            - forward
+            - rewind
