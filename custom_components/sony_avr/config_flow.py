@@ -15,6 +15,7 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_DMR_PORT,
     CONF_IRCC_PORT,
+    CONF_REGISTERED,
     DEFAULT_CERS_PORT,
     DEFAULT_DMR_PORT,
     DEFAULT_IRCC_PORT,
@@ -74,22 +75,30 @@ class SonyAvrConfigFlow(ConfigFlow, domain=DOMAIN):
                 dmr_port=user_input[CONF_DMR_PORT],
             )
 
-            try:
-                result = await client.async_register()
-            except PairingModeRequired:
-                errors["base"] = "pairing_mode_required"
-            except CannotConnect:
+            # Reachability is judged on the UPnP port, not on pairing: volume,
+            # transport and every IRCC command work unregistered, so a
+            # receiver that answers there is perfectly usable.
+            volume, _ = await client.async_get_volume()
+            transport, _ = await client.async_get_transport_info()
+
+            if volume is None and transport is None:
                 errors["base"] = "cannot_connect"
             else:
                 self._data = {**user_input, CONF_DEVICE_ID: device_id}
                 self._client = client
 
-                if result is AuthResult.SUCCESS:
-                    # Some receivers pair without ever showing a PIN.
-                    return self._create_entry()
+                # Pairing only adds the input name and media title, so a
+                # refusal is not worth failing setup over.
+                try:
+                    result = await client.async_register()
+                except (PairingModeRequired, CannotConnect):
+                    result = AuthResult.ERROR
+
                 if result is AuthResult.PIN_NEEDED:
                     return await self.async_step_pin()
-                errors["base"] = "cannot_register"
+
+                self._data[CONF_REGISTERED] = result is AuthResult.SUCCESS
+                return self._create_entry()
 
         return self.async_show_form(
             step_id="user", data_schema=USER_SCHEMA, errors=errors
@@ -109,6 +118,7 @@ class SonyAvrConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             else:
                 if result is AuthResult.SUCCESS:
+                    self._data[CONF_REGISTERED] = True
                     return self._create_entry()
                 errors["base"] = "invalid_auth"
 

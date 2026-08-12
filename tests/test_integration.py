@@ -37,9 +37,15 @@ from custom_components.sony_avr.const import (
     CONF_DEVICE_ID,
     CONF_DMR_PORT,
     CONF_IRCC_PORT,
+    CONF_REGISTERED,
     DOMAIN,
 )
-from custom_components.sony_avr.sony import AuthResult, CannotConnect, SonyStatus
+from custom_components.sony_avr.sony import (
+    AuthResult,
+    CannotConnect,
+    PairingModeRequired,
+    SonyStatus,
+)
 
 ENTITY_ID = "media_player.test_receiver"
 
@@ -101,6 +107,9 @@ async def test_full_config_flow_with_pin(hass: HomeAssistant) -> None:
 
     client = AsyncMock()
     client.async_register.return_value = AuthResult.PIN_NEEDED
+    # The flow probes UPnP first to decide reachability.
+    client.async_get_volume.return_value = (40, False)
+    client.async_get_transport_info.return_value = ("PLAYING", None)
 
     # Creating the entry triggers async_setup_entry, which would build a real
     # client and start polling, so the setup path is stubbed out too.
@@ -138,12 +147,18 @@ async def test_full_config_flow_with_pin(hass: HomeAssistant) -> None:
 
 
 async def test_config_flow_unreachable_receiver(hass: HomeAssistant) -> None:
-    """An unreachable receiver shows an error instead of creating an entry."""
+    """A receiver that does not answer on UPnP shows an error.
+
+    Reachability is decided by UPnP, not by pairing, so this is what an
+    actually-unreachable receiver looks like.
+    """
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "user"}
     )
 
     client = AsyncMock()
+    client.async_get_volume.return_value = (None, None)
+    client.async_get_transport_info.return_value = (None, None)
     client.async_register.side_effect = CannotConnect("nope")
 
     with patch(
@@ -172,6 +187,8 @@ async def test_config_flow_bad_pin(hass: HomeAssistant) -> None:
 
     client = AsyncMock()
     client.async_register.return_value = AuthResult.PIN_NEEDED
+    client.async_get_volume.return_value = (40, False)
+    client.async_get_transport_info.return_value = ("PLAYING", None)
 
     with patch(
         "custom_components.sony_avr.config_flow.SonyAvrClient", return_value=client
@@ -193,6 +210,46 @@ async def test_config_flow_bad_pin(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "invalid_auth"}
+
+
+async def test_setup_succeeds_when_pairing_refused(hass: HomeAssistant) -> None:
+    """A receiver that refuses pairing still gets set up.
+
+    The STR-DN840 answers 406 unless its registration screen is open, but
+    volume, transport and every IRCC command work without pairing, so refusing
+    to create the entry would deny a perfectly usable receiver.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+
+    client = AsyncMock()
+    client.async_get_volume.return_value = (39, False)
+    client.async_get_transport_info.return_value = ("PLAYING", None)
+    client.async_register.side_effect = PairingModeRequired("open the menu")
+    client.async_get_status.return_value = make_status()
+
+    with (
+        patch(
+            "custom_components.sony_avr.config_flow.SonyAvrClient", return_value=client
+        ),
+        patch("custom_components.sony_avr.SonyAvrClient", return_value=client),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_HOST: "192.168.1.50",
+                CONF_NAME: "Test Receiver",
+                CONF_CERS_PORT: 50001,
+                CONF_IRCC_PORT: 8080,
+                CONF_DMR_PORT: 8080,
+            },
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # Recorded as unregistered, so the coordinator skips the CERS endpoints.
+    assert result["data"][CONF_REGISTERED] is False
 
 
 async def test_duplicate_host_aborts(hass: HomeAssistant) -> None:

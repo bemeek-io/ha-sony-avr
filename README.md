@@ -24,15 +24,16 @@ Only the STR-DN840 has been tested. Reports for the others are welcome.
 
 A `media_player` entity supporting:
 
-| Capability | How it works |
-| --- | --- |
-| Power on / off | IRCC power codes |
-| Volume set | UPnP `RenderingControl` (absolute, 0–100) |
-| Volume up / down | IRCC step codes |
-| Mute | `RenderingControl`, falling back to the IRCC toggle |
-| Source select | IRCC input codes |
-| Transport (play/pause/stop/next/prev) | IRCC codes |
-| State, volume, mute, source, title | Polled from CERS + UPnP every 10s |
+| Capability | How it works | Needs pairing |
+| --- | --- | --- |
+| Power on / off | IRCC power codes | no |
+| Volume set | UPnP `RenderingControl` (absolute, 0–100) | no |
+| Volume up / down | IRCC step codes | no |
+| Mute | `RenderingControl`, falling back to the IRCC toggle | no |
+| Source select | IRCC input codes | no |
+| Transport (play/pause/stop/next/prev) | IRCC codes | no |
+| State, volume, mute | Polled from UPnP every 10s | no |
+| Current input name, media title | Polled from CERS every 10s | yes |
 
 Plus a `sony_avr.send_command` service for any remote key without a
 `media_player` equivalent (`home`, `display`, `options`, arrow keys, …).
@@ -60,9 +61,17 @@ Sony AVR (IRCC)**.
 
 1. Enter the receiver's IP address. Give it a DHCP reservation — the pairing is
    tied to the address.
-2. The receiver displays a PIN. Enter it.
+2. That's it.
 
-That's it. If the receiver pairs without showing a PIN, the flow skips that step.
+**Pairing is optional.** Volume, mute, transport state and every remote command
+work over UPnP and IRCC without registering, so setup completes whether or not
+the receiver accepts a pairing request. Registration only adds the current
+input name and media title.
+
+If you want those, put the receiver into pairing mode before adding the
+integration — on the STR-DN840 that is **Home Network → Access Settings**,
+where **Auto Access** should be **On**. Receivers that use a PIN will prompt
+for one during setup.
 
 ## The `send_command` service
 

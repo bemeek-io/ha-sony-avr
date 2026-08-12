@@ -300,9 +300,10 @@ async def test_set_mute(receiver) -> None:
 
 
 async def test_get_status_parses_source_and_title(receiver) -> None:
-    """A full status poll yields power, source, volume and transport state."""
+    """A registered client also gets the source and title from CERS."""
     stub, client = receiver
     stub.volume = 30
+    client._registered = True
     status = await client.async_get_status()
 
     assert status.available is True
@@ -311,6 +312,25 @@ async def test_get_status_parses_source_and_title(receiver) -> None:
     assert status.media_title == "Test Title"
     assert status.volume == 30
     assert status.transport_state == "PLAYING"
+
+
+async def test_status_skips_cers_when_unregistered(receiver) -> None:
+    """An unregistered client reads state over UPnP and never touches CERS.
+
+    Registration is optional, and polling the CERS port when it would only
+    refuse is what wedges the receiver's control service.
+    """
+    stub, client = receiver
+    stub.volume = 30
+
+    status = await client.async_get_status()
+
+    assert status.available is True
+    assert status.volume == 30
+    assert status.transport_state == "PLAYING"
+    # No source without CERS, and crucially no request to it either.
+    assert status.source is None
+    assert not any(kind == "status" for kind, _ in stub.requests)
 
 
 async def test_status_when_receiver_is_asleep() -> None:

@@ -12,6 +12,7 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_DMR_PORT,
     CONF_IRCC_PORT,
+    CONF_REGISTERED,
     DEFAULT_CERS_PORT,
     DEFAULT_DMR_PORT,
     DEFAULT_IRCC_PORT,
@@ -33,6 +34,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SonyAvrConfigEntry) -> b
         cers_port=entry.data.get(CONF_CERS_PORT, DEFAULT_CERS_PORT),
         ircc_port=entry.data.get(CONF_IRCC_PORT, DEFAULT_IRCC_PORT),
         dmr_port=entry.data.get(CONF_DMR_PORT, DEFAULT_DMR_PORT),
+        registered=entry.data.get(CONF_REGISTERED, False),
     )
 
     coordinator = SonyAvrCoordinator(hass, entry, client)

@@ -11,6 +11,9 @@ CONF_CERS_PORT: Final = "cers_port"
 CONF_DMR_PORT: Final = "dmr_port"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_MAC: Final = "mac"
+# Whether CERS pairing completed. Optional: the integration works without
+# it, but the input name and media title need it.
+CONF_REGISTERED: Final = "registered"
 
 # Verified against an STR-DN840 on firmware JB3.1.1.
 #

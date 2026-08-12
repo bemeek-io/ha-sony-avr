@@ -196,14 +196,21 @@ class SonyAvrClient:
         cers_port: int = DEFAULT_CERS_PORT,
         ircc_port: int = DEFAULT_IRCC_PORT,
         dmr_port: int = DEFAULT_DMR_PORT,
+        registered: bool = False,
     ) -> None:
-        """Initialise the client. *device_id* must be stable across restarts."""
+        """Initialise the client. *device_id* must be stable across restarts.
+
+        *registered* says whether pairing completed. It is purely an
+        optimisation: when False the CERS endpoints are skipped, since they
+        would only refuse, and control still works over UPnP and IRCC.
+        """
         self._host = host
         self._session = session
         self._device_id = device_id
         self._cers_port = cers_port
         self._ircc_port = ircc_port
         self._dmr_port = dmr_port
+        self._registered = registered
         self._timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
 
     @property
@@ -323,18 +330,27 @@ class SonyAvrClient:
             "Connection": "close",
         }
 
-        try:
-            async with self._session.post(
-                url,
-                data=envelope.encode("utf-8"),
-                headers=headers,
-                timeout=self._timeout,
-            ) as response:
-                if response.status != 200:
+        # The receiver closes the socket after every response but does not
+        # always say so in a way aiohttp's pool believes, so a pooled
+        # connection is frequently already dead by the time it is reused. That
+        # shows up as the second of two back-to-back calls failing. One retry
+        # on a fresh connection is enough, since the failure is the stale
+        # socket rather than the request.
+        for attempt in (1, 2):
+            try:
+                async with self._session.post(
+                    url,
+                    data=envelope.encode("utf-8"),
+                    headers=headers,
+                    timeout=self._timeout,
+                ) as response:
+                    if response.status != 200:
+                        return None
+                    text = await response.text()
+                    break
+            except (TimeoutError, aiohttp.ClientError):
+                if attempt == 2:
                     return None
-                text = await response.text()
-        except (TimeoutError, aiohttp.ClientError):
-            return None
 
         root = _parse_xml(text)
         if root is None:
@@ -423,13 +439,42 @@ class SonyAvrClient:
     async def async_get_status(self) -> SonyStatus:
         """Poll the receiver for a full state snapshot.
 
-        An unreachable receiver is reported as unavailable rather than raising,
-        since standby is indistinguishable from being switched off at the wall.
+        Everything that matters -- volume, mute, transport state -- comes from
+        the UPnP services on port 8080, which need no pairing. Registration
+        only adds the CERS status document, whose unique contribution is the
+        current input name and media title.
 
-        Availability is judged by whether the receiver answers at all, not by
-        whether ``getStatus`` succeeds: that endpoint returns 400 until the
-        client has been registered, and an unregistered-but-awake receiver is
-        still very much reachable.
+        So UPnP is the source of truth for availability, and CERS is a bonus
+        that is skipped entirely when the client is not registered. That also
+        keeps the poll loop off port 50001, whose service wedges under
+        repeated rejected requests.
+        """
+        volume, muted = await self.async_get_volume()
+        transport_state, title = await self.async_get_transport_info()
+
+        if volume is None and transport_state is None:
+            # Nothing answered on 8080, so the receiver is asleep or gone.
+            return SonyStatus(available=False)
+
+        status = SonyStatus(
+            available=True,
+            power_on=True,
+            volume=volume,
+            muted=muted,
+            transport_state=transport_state,
+            media_title=title,
+        )
+
+        if self._registered:
+            await self._async_apply_cers_status(status)
+
+        return status
+
+    async def _async_apply_cers_status(self, status: SonyStatus) -> None:
+        """Overlay the CERS status document onto *status*, if it is available.
+
+        Best effort: a receiver that refuses or drops the request simply leaves
+        the UPnP-derived values in place.
         """
         url = f"http://{self._host}:{self._cers_port}/cers/getStatus"
 
@@ -437,40 +482,15 @@ class SonyAvrClient:
             async with self._session.get(
                 url, headers=self._cers_headers(), timeout=self._timeout
             ) as response:
-                if response.status == 401:
-                    raise InvalidAuth("Receiver no longer trusts this client")
-                text = await response.text() if response.status == 200 else None
-        except aiohttp.ClientResponseError:
-            raise
+                if response.status != 200:
+                    return
+                text = await response.text()
         except (TimeoutError, aiohttp.ClientError):
-            # Unregistered clients get a truncated 403 that aiohttp cannot
-            # parse. That is not the same as being unreachable, so fall back to
-            # reading the bare status before giving up on the receiver.
-            try:
-                async with asyncio.timeout(REQUEST_TIMEOUT):
-                    status_code = await _raw_status(
-                        self._host,
-                        self._cers_port,
-                        "/cers/getStatus",
-                        self._cers_headers(),
-                    )
-            except (TimeoutError, OSError, CannotConnect):
-                return SonyStatus(available=False)
+            return
 
-            if status_code == 401:
-                raise InvalidAuth("Receiver no longer trusts this client") from None
-            text = None
-
-        status = SonyStatus(available=True, power_on=True)
-
-        # Without registration there is no status document, but volume and
-        # transport still read fine over UPnP, so carry on and fill those in.
-        root = _parse_xml(text) if text else None
+        root = _parse_xml(text)
         if root is None:
-            status.volume, status.muted = await self.async_get_volume()
-            status.transport_state, title = await self.async_get_transport_info()
-            status.media_title = title
-            return status
+            return
 
         for element in root.iter():
             if element.tag.rpartition("}")[2] != "status":
@@ -480,18 +500,10 @@ class SonyAvrClient:
                 for item in element:
                     if item.get("field") == "source":
                         status.source = item.get("value")
-                    elif item.get("field") == "title":
+                    elif item.get("field") == "title" and item.get("value"):
                         status.media_title = item.get("value")
             elif name == "power":
                 status.power_on = element.get("value") != "off"
-
-        status.volume, status.muted = await self.async_get_volume()
-        transport_state, title = await self.async_get_transport_info()
-        status.transport_state = transport_state
-        if title and not status.media_title:
-            status.media_title = title
-
-        return status
 
     async def async_turn_on(self) -> None:
         """Wake the receiver.
