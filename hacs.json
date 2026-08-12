@@ -1,6 +1,5 @@
 {
   "name": "Sony AVR (IRCC)",
-  "domains": ["media_player"],
   "content_in_root": false,
   "render_readme": true,
   "homeassistant": "2024.1.0"
