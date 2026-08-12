@@ -305,18 +305,44 @@ class SonyAvrClient:
             **self._cers_headers(),
         }
 
-        try:
-            async with self._session.post(
-                url, data=body.encode("utf-8"), headers=headers, timeout=self._timeout
-            ) as response:
-                if response.status == 401:
-                    raise InvalidAuth("Receiver rejected the command; re-pair needed")
-                if response.status != 200:
-                    raise SonyAvrError(
-                        f"IRCC command failed with status {response.status}"
-                    )
-        except (TimeoutError, aiohttp.ClientError) as err:
-            raise CannotConnect(f"Could not send command to {self._host}") from err
+        # Retried once for the same reason as the UPnP calls: a pooled
+        # connection to this receiver is often already dead when reused.
+        for attempt in (1, 2):
+            try:
+                async with self._session.post(
+                    url,
+                    data=body.encode("utf-8"),
+                    headers=headers,
+                    timeout=self._timeout,
+                ) as response:
+                    if response.status == 401:
+                        raise InvalidAuth(
+                            "Receiver rejected the command; re-pair needed"
+                        )
+                    if response.status == 200:
+                        return
+                    text = await response.text()
+                    break
+            except (TimeoutError, aiohttp.ClientError) as err:
+                if attempt == 2:
+                    raise CannotConnect(
+                        f"Could not send command to {self._host}"
+                    ) from err
+
+        # A rejected code comes back as a SOAP fault, and error 802 means the
+        # receiver simply does not implement that key rather than anything
+        # being wrong with the request.
+        root = _parse_xml(text)
+        error_code = _findtext(root, "errorCode") if root is not None else None
+        if error_code == "802":
+            raise SonyAvrError(
+                "The receiver does not support that command. Its IRCC key set "
+                "is much smaller than other Sony devices."
+            )
+        raise SonyAvrError(
+            f"IRCC command failed with status {response.status}"
+            + (f" (UPnP error {error_code})" if error_code else "")
+        )
 
     async def _async_soap(
         self, service: str, action: str, body: str, path: str
@@ -508,14 +534,15 @@ class SonyAvrClient:
     async def async_turn_on(self) -> None:
         """Wake the receiver.
 
-        Only works when the receiver's network standby setting keeps its
-        network interface alive; otherwise nothing is listening to hear this.
+        This generation has no discrete power-on code, so it is a toggle, and
+        it only works when the receiver's network standby setting keeps its
+        network interface alive; otherwise nothing is listening to hear it.
         """
-        await self.async_send_command("power_on")
+        await self.async_send_command("power_toggle")
 
     async def async_turn_off(self) -> None:
-        """Put the receiver into standby."""
-        await self.async_send_command("power_off")
+        """Put the receiver into standby, via the power toggle."""
+        await self.async_send_command("power_toggle")
 
 
 def _parse_didl_title(metadata: str) -> str | None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
 
 import voluptuous as vol
 from homeassistant.components.media_player import (
@@ -22,7 +21,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import SonyAvrConfigEntry
 from .const import DEFAULT_NAME, DOMAIN
 from .coordinator import SonyAvrCoordinator
-from .ircc_codes import INPUT_CODES, IRCC_CODES
+from .ircc_codes import IRCC_CODES
 from .sony import MAX_VOLUME, SonyAvrError
 
 _LOGGER = logging.getLogger(__name__)
@@ -63,20 +62,16 @@ class SonyAvrMediaPlayer(CoordinatorEntity[SonyAvrCoordinator], MediaPlayerEntit
     _attr_has_entity_name = True
     _attr_name = None
     _attr_device_class = MediaPlayerDeviceClass.RECEIVER
+    # Only what the receiver actually accepts. It rejects the IRCC codes for
+    # transport control and input selection outright, so advertising those
+    # would put buttons in the UI that cannot work.
     _attr_supported_features = (
         MediaPlayerEntityFeature.TURN_ON
         | MediaPlayerEntityFeature.TURN_OFF
         | MediaPlayerEntityFeature.VOLUME_SET
         | MediaPlayerEntityFeature.VOLUME_STEP
         | MediaPlayerEntityFeature.VOLUME_MUTE
-        | MediaPlayerEntityFeature.SELECT_SOURCE
-        | MediaPlayerEntityFeature.PLAY
-        | MediaPlayerEntityFeature.PAUSE
-        | MediaPlayerEntityFeature.STOP
-        | MediaPlayerEntityFeature.NEXT_TRACK
-        | MediaPlayerEntityFeature.PREVIOUS_TRACK
     )
-    _attr_source_list: ClassVar[list[str]] = list(INPUT_CODES)
 
     def __init__(
         self, coordinator: SonyAvrCoordinator, entry: SonyAvrConfigEntry
@@ -154,11 +149,19 @@ class SonyAvrMediaPlayer(CoordinatorEntity[SonyAvrCoordinator], MediaPlayerEntit
         await self.coordinator.async_request_refresh()
 
     async def async_turn_on(self) -> None:
-        """Wake the receiver."""
+        """Wake the receiver.
+
+        Only a power toggle exists on this generation, so this is a no-op when
+        the receiver is already on -- sending it would switch it off.
+        """
+        if self.state is not MediaPlayerState.OFF:
+            return
         await self._async_run(self.coordinator.client.async_turn_on())
 
     async def async_turn_off(self) -> None:
-        """Put the receiver into standby."""
+        """Put the receiver into standby, unless it is already off."""
+        if self.state is MediaPlayerState.OFF:
+            return
         await self._async_run(self.coordinator.client.async_turn_off())
 
     async def async_set_volume_level(self, volume: float) -> None:
@@ -178,30 +181,6 @@ class SonyAvrMediaPlayer(CoordinatorEntity[SonyAvrCoordinator], MediaPlayerEntit
     async def async_mute_volume(self, mute: bool) -> None:
         """Mute or unmute."""
         await self._async_run(self.coordinator.client.async_set_mute(mute))
-
-    async def async_select_source(self, source: str) -> None:
-        """Switch inputs."""
-        await self._async_run(self.coordinator.client.async_select_source(source))
-
-    async def async_media_play(self) -> None:
-        """Play."""
-        await self._async_run(self.coordinator.client.async_send_command("play"))
-
-    async def async_media_pause(self) -> None:
-        """Pause."""
-        await self._async_run(self.coordinator.client.async_send_command("pause"))
-
-    async def async_media_stop(self) -> None:
-        """Stop."""
-        await self._async_run(self.coordinator.client.async_send_command("stop"))
-
-    async def async_media_next_track(self) -> None:
-        """Skip forward."""
-        await self._async_run(self.coordinator.client.async_send_command("next"))
-
-    async def async_media_previous_track(self) -> None:
-        """Skip back."""
-        await self._async_run(self.coordinator.client.async_send_command("prev"))
 
     async def async_send_command(self, command: str) -> None:
         """Send an arbitrary IRCC command, for keys with no HA equivalent."""

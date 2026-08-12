@@ -357,7 +357,7 @@ async def test_command_to_asleep_receiver_raises() -> None:
             "127.0.0.1", session, device_id="test", ircc_port=9, cers_port=9, dmr_port=9
         )
         with pytest.raises(CannotConnect):
-            await client.async_send_command("power_on")
+            await client.async_send_command("power_toggle")
 
 
 def test_generate_device_id_is_unique_and_shaped() -> None:

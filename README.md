@@ -26,14 +26,30 @@ A `media_player` entity supporting:
 
 | Capability | How it works | Needs pairing |
 | --- | --- | --- |
-| Power on / off | IRCC power codes | no |
+| Power on / off | IRCC power toggle | no |
 | Volume set | UPnP `RenderingControl` (absolute, 0–100) | no |
 | Volume up / down | IRCC step codes | no |
 | Mute | `RenderingControl`, falling back to the IRCC toggle | no |
-| Source select | IRCC input codes | no |
-| Transport (play/pause/stop/next/prev) | IRCC codes | no |
 | State, volume, mute | Polled from UPnP every 10s | no |
 | Current input name, media title | Polled from CERS every 10s | yes |
+
+### What this receiver cannot do
+
+The STR-DN840 implements a much smaller IRCC key set than Sony's TVs, and
+rejects anything outside it with UPnP error 802. Sweeping the whole command
+space found only 17 working keys, which rules out:
+
+- **Input selection.** No IRCC input code is accepted, so there is no way to
+  switch sources over the network. The integration does not advertise
+  `SELECT_SOURCE` rather than offering a control that cannot work.
+- **Transport control.** Play, pause, stop, next and previous are all
+  rejected.
+- **Discrete power on/off.** Only a toggle exists, so `turn_on` and `turn_off`
+  both send it and are suppressed when the receiver is already in the
+  requested state.
+
+Working keys beyond the ones above are the numeric keypad (`num0`–`num9`),
+`home`, and two unidentified codes, all reachable through `send_command`.
 
 Plus a `sony_avr.send_command` service for any remote key without a
 `media_player` equivalent (`home`, `display`, `options`, arrow keys, …).

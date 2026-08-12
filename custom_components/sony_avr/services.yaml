@@ -11,26 +11,18 @@ send_command:
         select:
           custom_value: true
           options:
-            - power_on
-            - power_off
             - power_toggle
-            - sleep
             - volume_up
             - volume_down
             - mute
-            - up
-            - down
-            - left
-            - right
-            - confirm
             - home
-            - options
-            - return
-            - display
-            - play
-            - pause
-            - stop
-            - next
-            - prev
-            - forward
-            - rewind
+            - num0
+            - num1
+            - num2
+            - num3
+            - num4
+            - num5
+            - num6
+            - num7
+            - num8
+            - num9

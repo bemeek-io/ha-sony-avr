@@ -302,9 +302,22 @@ async def test_entity_off_when_receiver_asleep(hass: HomeAssistant) -> None:
     assert state.state == STATE_OFF
 
 
-async def test_turn_on_and_off(hass: HomeAssistant) -> None:
-    """Power services reach the client."""
+async def test_turn_off_when_on(hass: HomeAssistant) -> None:
+    """Turning off an on receiver sends the power toggle."""
     _, client = await setup_entry(hass, make_status())
+
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: ENTITY_ID},
+        blocking=True,
+    )
+    client.async_turn_off.assert_awaited_once()
+
+
+async def test_turn_on_when_off(hass: HomeAssistant) -> None:
+    """Turning on an off receiver sends the power toggle."""
+    _, client = await setup_entry(hass, SonyStatus(available=False))
 
     await hass.services.async_call(
         MEDIA_PLAYER_DOMAIN,
@@ -314,13 +327,22 @@ async def test_turn_on_and_off(hass: HomeAssistant) -> None:
     )
     client.async_turn_on.assert_awaited_once()
 
+
+async def test_power_commands_are_not_sent_redundantly(hass: HomeAssistant) -> None:
+    """Power is a toggle, so a redundant call must not flip the receiver.
+
+    Turning on an already-on receiver would switch it off, which is worse than
+    doing nothing.
+    """
+    _, client = await setup_entry(hass, make_status())
+
     await hass.services.async_call(
         MEDIA_PLAYER_DOMAIN,
-        SERVICE_TURN_OFF,
+        SERVICE_TURN_ON,
         {ATTR_ENTITY_ID: ENTITY_ID},
         blocking=True,
     )
-    client.async_turn_off.assert_awaited_once()
+    client.async_turn_on.assert_not_awaited()
 
 
 async def test_set_volume_scales_to_device_range(hass: HomeAssistant) -> None:
