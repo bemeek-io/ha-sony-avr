@@ -104,10 +104,16 @@ that does nothing is more likely a wrong code than a transport error.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install pytest pytest-asyncio pytest-aiohttp ruff
+.venv/bin/pip install homeassistant pytest-homeassistant-custom-component
 .venv/bin/python -m pytest tests/ -q
 .venv/bin/ruff check .
 ```
+
+Install the dependencies directly rather than with `pip install -e .`. An
+editable install leaves a finder path hook on `sys.path` that Home Assistant's
+integration loader tries to read as a directory, which breaks every test that
+starts a Home Assistant instance.
 
 The protocol client in [`sony.py`](custom_components/sony_avr/sony.py) has no
 Home Assistant imports, so `tests/test_sony.py` exercises it against a stub HTTP
