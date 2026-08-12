@@ -14,6 +14,7 @@ from aiohttp import web
 from sony_avr_protocol.sony import (
     AuthResult,
     CannotConnect,
+    PairingModeRequired,
     SonyAvrClient,
     SonyAvrError,
     _findtext,
@@ -62,9 +63,14 @@ class FakeReceiver:
         self.require_pin = True
         self.reject_all_pins = False
         self.auth_header: str | None = None
+        # Overrides for the status codes the receiver can return.
+        self.register_status: int | None = None
+        self.status_code = 200
 
     async def handle_register(self, request: web.Request) -> web.Response:
         self.requests.append(("register", request.path_qs))
+        if self.register_status is not None:
+            return web.Response(status=self.register_status)
         auth = request.headers.get("Authorization")
         if self.reject_all_pins or (self.require_pin and not auth):
             return web.Response(status=401)
@@ -74,6 +80,8 @@ class FakeReceiver:
 
     async def handle_status(self, request: web.Request) -> web.Response:
         self.requests.append(("status", request.path))
+        if self.status_code != 200:
+            return web.Response(status=self.status_code)
         return web.Response(status=200, text=STATUS_XML, content_type="text/xml")
 
     async def handle_ircc(self, request: web.Request) -> web.Response:
@@ -146,9 +154,10 @@ async def receiver(aiohttp_server):
     app = web.Application()
     app.router.add_get("/cers/register", stub.handle_register)
     app.router.add_get("/cers/getStatus", stub.handle_status)
+    # Paths as advertised by a real STR-DN840's description.xml.
     app.router.add_post("/upnp/control/IRCC", stub.handle_ircc)
-    app.router.add_post("/upnp/control/RenderingControl", stub.handle_rendering)
-    app.router.add_post("/upnp/control/AVTransport", stub.handle_avtransport)
+    app.router.add_post("/RenderingControl/ctrl", stub.handle_rendering)
+    app.router.add_post("/AVTransport/ctrl", stub.handle_avtransport)
 
     server = await aiohttp_server(app)
     async with aiohttp.ClientSession() as session:
@@ -185,6 +194,51 @@ async def test_register_rejects_bad_pin(receiver) -> None:
     stub, client = receiver
     stub.reject_all_pins = True
     assert await client.async_register("0000") is AuthResult.ERROR
+
+
+async def test_register_reports_pairing_mode_required(receiver) -> None:
+    """A 406 means the receiver needs to be put into pairing mode.
+
+    The STR-DN840 answers 406 unless the user has the device-registration
+    screen open, which is a different problem from being unreachable and needs
+    a different message.
+    """
+    stub, client = receiver
+    stub.register_status = 406
+
+    with pytest.raises(PairingModeRequired):
+        await client.async_register()
+
+
+async def test_device_id_is_url_encoded(receiver) -> None:
+    """The colons in the device id must be percent-encoded.
+
+    Sent raw they truncate the query string and the receiver drops the
+    connection without replying.
+    """
+    stub, client = receiver
+    stub.require_pin = False
+    await client.async_register()
+
+    _, query = stub.requests[0]
+    assert "%3A" in query
+    assert "deviceId=MediaRemote%3A" in query
+
+
+async def test_status_available_when_unregistered(receiver) -> None:
+    """An unregistered receiver is still reachable, and still reports volume.
+
+    getStatus answers 400 until registration, but the UPnP services work
+    regardless, so the entity should not go unavailable.
+    """
+    stub, client = receiver
+    stub.status_code = 400
+    stub.volume = 39
+
+    status = await client.async_get_status()
+    assert status.available is True
+    assert status.volume == 39
+    assert status.transport_state == "PLAYING"
 
 
 async def test_register_without_pin_when_not_required(receiver) -> None:

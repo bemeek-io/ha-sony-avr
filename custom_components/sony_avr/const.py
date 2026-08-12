@@ -12,12 +12,20 @@ CONF_DMR_PORT: Final = "dmr_port"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_MAC: Final = "mac"
 
-# Sony's "network remote" ports. The receiver serves the CERS registration and
-# status API on 50001 and the UPnP/DLNA renderer (AVTransport, RenderingControl)
-# on 52323. IRCC control lives on the CERS port for the DN8xx/DN10xx era.
+# Verified against an STR-DN840 on firmware JB3.1.1.
+#
+# CERS registration and status live on 50001, but everything else -- IRCC and
+# the UPnP renderer (RenderingControl, AVTransport) -- is served from the
+# device description port, 8080. The control paths are likewise the ones the
+# description advertises, not the /upnp/control/<Service> layout used by Sony's
+# TVs.
 DEFAULT_CERS_PORT: Final = 50001
-DEFAULT_IRCC_PORT: Final = 50001
-DEFAULT_DMR_PORT: Final = 52323
+DEFAULT_IRCC_PORT: Final = 8080
+DEFAULT_DMR_PORT: Final = 8080
+
+IRCC_CONTROL_PATH: Final = "/upnp/control/IRCC"
+RENDERING_CONTROL_PATH: Final = "/RenderingControl/ctrl"
+AV_TRANSPORT_PATH: Final = "/AVTransport/ctrl"
 
 DEFAULT_NAME: Final = "Sony AVR"
 

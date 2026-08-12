@@ -1,39 +1,53 @@
 """Async client for Sony AV receivers using IRCC-IP and UPnP.
 
-This talks to the receiver the way the TV SideView app does:
+This talks to the receiver the way the TV SideView app does. Verified against
+an STR-DN840 running firmware JB3.1.1:
 
-* ``/cers/register`` on the CERS port performs the one-time pairing. The
-  receiver shows a PIN on its front panel / OSD which is echoed back as HTTP
-  basic auth to complete registration.
+* ``/cers/register`` on port 50001 performs the one-time pairing. This
+  generation registers in "mode 1", which has no PIN at all -- but it only
+  accepts a registration while the user has the device-registration screen
+  open on the receiver, and answers 406 otherwise.
 * ``/upnp/control/IRCC`` accepts ``X_SendIRCC`` SOAP calls carrying a
   base64 key code -- the same codes the physical remote emits.
-* The DLNA renderer on the DMR port exposes ``RenderingControl`` (volume,
-  mute) and ``AVTransport`` (transport state), which is how we read state
-  back rather than guessing it.
+* ``/RenderingControl/ctrl`` (volume, mute) and ``/AVTransport/ctrl``
+  (transport state) are how state is read back rather than guessed.
+
+Note that only registration lives on 50001; IRCC and the UPnP services are all
+served from port 8080, at the paths the device description advertises rather
+than the ``/upnp/control/<Service>`` layout Sony's TVs use.
 
 The receiver is not a well-behaved HTTP server: it wants a lowercase
-``soapaction`` header, closes connections eagerly, and stops listening
-entirely a second or two after entering standby.
+``soapaction`` header, closes connections eagerly, rejects a device id whose
+colons are not percent-encoded by dropping the connection outright, and stops
+listening a second or two after entering standby. Its CERS service will also
+wedge -- accepting TCP but never replying -- after repeated rejected
+registrations, and only a power cycle clears it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import re
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from urllib.parse import quote
 from xml.etree import ElementTree
 
 import aiohttp
 
 from .const import (
+    AV_TRANSPORT_PATH,
     CLIENT_NAME,
     CLIENT_TYPE,
     DEFAULT_CERS_PORT,
     DEFAULT_DMR_PORT,
     DEFAULT_IRCC_PORT,
+    IRCC_CONTROL_PATH,
+    RENDERING_CONTROL_PATH,
     REQUEST_TIMEOUT,
 )
 from .ircc_codes import INPUT_CODES, IRCC_CODES
@@ -69,6 +83,14 @@ class CannotConnect(SonyAvrError):
 
 class InvalidAuth(SonyAvrError):
     """The receiver rejected our credentials or PIN."""
+
+
+class PairingModeRequired(SonyAvrError):
+    """The receiver refused to pair until it is put into pairing mode.
+
+    The DN8xx generation will not accept a registration unless the user has
+    opened the device-registration screen on the receiver itself.
+    """
 
 
 @dataclass
@@ -116,6 +138,38 @@ def _parse_xml(text: str) -> ElementTree.Element | None:
         return ElementTree.fromstring(stripped)
     except ElementTree.ParseError:
         return None
+
+
+async def _raw_status(
+    host: str, port: int, target: str, headers: dict[str, str]
+) -> int:
+    """Fetch just the HTTP status code over a bare socket.
+
+    The receiver's error responses are truncated: it sends the status line and
+    some headers, then closes without the blank line that ends the header
+    block. aiohttp's parser treats that as a disconnect and discards the
+    response, so the status -- which is the only part we need -- is read here
+    by hand instead.
+    """
+    request = f"GET {target} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+    for key, value in headers.items():
+        request += f"{key}: {value}\r\n"
+    request += "\r\n"
+
+    reader, writer = await asyncio.open_connection(host, port)
+    try:
+        writer.write(request.encode())
+        await writer.drain()
+        status_line = await reader.readline()
+    finally:
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+
+    parts = status_line.decode("ascii", "replace").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise CannotConnect(f"Malformed response from {host}: {status_line!r}")
+    return int(parts[1])
 
 
 def _findtext(root: ElementTree.Element, tag: str) -> str | None:
@@ -173,13 +227,18 @@ class SonyAvrClient:
     async def async_register(self, pin: str | None = None) -> AuthResult:
         """Pair with the receiver.
 
-        Called once with no PIN to make the receiver display one, then again
-        with that PIN to finish. Returns ``PIN_NEEDED`` after the first step.
+        Two registration modes exist in this family. Mode 3 devices show a PIN
+        and answer 401 until it is supplied. Mode 1 devices -- including the
+        STR-DN840 -- have no PIN at all and simply answer 200, but only while
+        the user has the registration screen open on the receiver; otherwise
+        they answer 406.
         """
-        url = (
-            f"http://{self._host}:{self._cers_port}/cers/register"
-            f"?name={CLIENT_NAME}&registrationType=initial"
-            f"&deviceId={self._device_id}"
+        # The colons must be percent-encoded; sent raw they truncate the query
+        # and the receiver drops the connection without replying.
+        target = (
+            "/cers/register"
+            f"?name={quote(CLIENT_NAME, safe='')}&registrationType=initial"
+            f"&deviceId={quote(self._device_id, safe='')}"
         )
         headers = self._cers_headers()
         if pin:
@@ -189,25 +248,27 @@ class SonyAvrClient:
             headers["Authorization"] = f"Basic {token}"
 
         try:
-            async with self._session.get(
-                url,
-                headers=headers,
-                timeout=self._timeout,
-            ) as response:
-                if response.status == 200:
-                    return AuthResult.SUCCESS
-                # 401 on the first call is the receiver telling us it has put a
-                # PIN on screen and is waiting for it.
-                if response.status == 401:
-                    return AuthResult.ERROR if pin else AuthResult.PIN_NEEDED
-                _LOGGER.debug(
-                    "Registration returned unexpected status %s", response.status
-                )
-                return AuthResult.ERROR
-        except (TimeoutError, aiohttp.ClientError) as err:
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                status = await _raw_status(self._host, self._cers_port, target, headers)
+        except (TimeoutError, OSError) as err:
             raise CannotConnect(
                 f"Could not reach {self._host}; is the receiver powered on?"
             ) from err
+
+        if status == 200:
+            return AuthResult.SUCCESS
+        # 401 on the first call is the receiver telling us it has put a PIN on
+        # screen and is waiting for it.
+        if status == 401:
+            return AuthResult.ERROR if pin else AuthResult.PIN_NEEDED
+        if status == 406:
+            raise PairingModeRequired(
+                "The receiver refused the pairing request. Open "
+                "Settings > Network > Device Registration on the "
+                "receiver, choose to add a device, and try again."
+            )
+        _LOGGER.debug("Registration returned unexpected status %s", status)
+        return AuthResult.ERROR
 
     async def async_send_command(self, command: str) -> None:
         """Send a named IRCC command from :data:`IRCC_CODES`."""
@@ -225,7 +286,7 @@ class SonyAvrClient:
 
     async def async_send_code(self, code: str) -> None:
         """Send a raw base64 IRCC key code."""
-        url = f"http://{self._host}:{self._ircc_port}/upnp/control/IRCC"
+        url = f"http://{self._host}:{self._ircc_port}{IRCC_CONTROL_PATH}"
         body = _soap_envelope(
             IRCC_SERVICE, "X_SendIRCC", f"<IRCCCode>{code}</IRCCCode>"
         )
@@ -289,7 +350,7 @@ class SonyAvrClient:
             RENDERING_CONTROL_SERVICE,
             "GetVolume",
             "<InstanceID>0</InstanceID><Channel>Master</Channel>",
-            "/upnp/control/RenderingControl",
+            RENDERING_CONTROL_PATH,
         )
         if root is not None and (text := _findtext(root, "CurrentVolume")):
             try:
@@ -301,7 +362,7 @@ class SonyAvrClient:
             RENDERING_CONTROL_SERVICE,
             "GetMute",
             "<InstanceID>0</InstanceID><Channel>Master</Channel>",
-            "/upnp/control/RenderingControl",
+            RENDERING_CONTROL_PATH,
         )
         if root is not None and (text := _findtext(root, "CurrentMute")):
             muted = text in ("1", "true", "True")
@@ -316,7 +377,7 @@ class SonyAvrClient:
             "SetVolume",
             "<InstanceID>0</InstanceID><Channel>Master</Channel>"
             f"<DesiredVolume>{volume}</DesiredVolume>",
-            "/upnp/control/RenderingControl",
+            RENDERING_CONTROL_PATH,
         )
         if result is None:
             raise CannotConnect("Could not set volume; receiver did not respond")
@@ -328,7 +389,7 @@ class SonyAvrClient:
             "SetMute",
             "<InstanceID>0</InstanceID><Channel>Master</Channel>"
             f"<DesiredMute>{1 if mute else 0}</DesiredMute>",
-            "/upnp/control/RenderingControl",
+            RENDERING_CONTROL_PATH,
         )
         if result is None:
             # Some firmware revisions reject SetMute but honour the remote key.
@@ -343,7 +404,7 @@ class SonyAvrClient:
             AV_TRANSPORT_SERVICE,
             "GetTransportInfo",
             "<InstanceID>0</InstanceID>",
-            "/upnp/control/AVTransport",
+            AV_TRANSPORT_PATH,
         )
         if root is not None:
             state = _findtext(root, "CurrentTransportState")
@@ -352,7 +413,7 @@ class SonyAvrClient:
             AV_TRANSPORT_SERVICE,
             "GetPositionInfo",
             "<InstanceID>0</InstanceID>",
-            "/upnp/control/AVTransport",
+            AV_TRANSPORT_PATH,
         )
         if root is not None and (metadata := _findtext(root, "TrackMetaData")):
             title = _parse_didl_title(metadata)
@@ -364,6 +425,11 @@ class SonyAvrClient:
 
         An unreachable receiver is reported as unavailable rather than raising,
         since standby is indistinguishable from being switched off at the wall.
+
+        Availability is judged by whether the receiver answers at all, not by
+        whether ``getStatus`` succeeds: that endpoint returns 400 until the
+        client has been registered, and an unregistered-but-awake receiver is
+        still very much reachable.
         """
         url = f"http://{self._host}:{self._cers_port}/cers/getStatus"
 
@@ -373,17 +439,37 @@ class SonyAvrClient:
             ) as response:
                 if response.status == 401:
                     raise InvalidAuth("Receiver no longer trusts this client")
-                if response.status != 200:
-                    return SonyStatus(available=False)
-                text = await response.text()
+                text = await response.text() if response.status == 200 else None
+        except aiohttp.ClientResponseError:
+            raise
         except (TimeoutError, aiohttp.ClientError):
-            return SonyStatus(available=False)
+            # Unregistered clients get a truncated 403 that aiohttp cannot
+            # parse. That is not the same as being unreachable, so fall back to
+            # reading the bare status before giving up on the receiver.
+            try:
+                async with asyncio.timeout(REQUEST_TIMEOUT):
+                    status_code = await _raw_status(
+                        self._host,
+                        self._cers_port,
+                        "/cers/getStatus",
+                        self._cers_headers(),
+                    )
+            except (TimeoutError, OSError, CannotConnect):
+                return SonyStatus(available=False)
+
+            if status_code == 401:
+                raise InvalidAuth("Receiver no longer trusts this client") from None
+            text = None
 
         status = SonyStatus(available=True, power_on=True)
 
-        root = _parse_xml(text)
+        # Without registration there is no status document, but volume and
+        # transport still read fine over UPnP, so carry on and fill those in.
+        root = _parse_xml(text) if text else None
         if root is None:
-            # Reachable but unparsable still means it is awake.
+            status.volume, status.muted = await self.async_get_volume()
+            status.transport_state, title = await self.async_get_transport_info()
+            status.media_title = title
             return status
 
         for element in root.iter():
@@ -431,8 +517,10 @@ def _parse_didl_title(metadata: str) -> str | None:
 def generate_device_id() -> str:
     """Build a stable client id for registration.
 
-    Sony expects a MAC-shaped identifier; a random one is fine as long as it
-    does not change, since the receiver keys its pairing table on this value.
+    The receiver expects ``MediaRemote:`` followed by a colon-separated
+    MAC-shaped value, and rejects other shapes outright. A random value is
+    fine as long as it never changes, since the receiver keys its pairing
+    table on this id.
     """
     import uuid
 

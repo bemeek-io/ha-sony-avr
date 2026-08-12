@@ -41,19 +41,24 @@ IRCC_CODES: Final[dict[str, str]] = {
     "rewind": "AAAAAgAAADAAAAB4Aw==",
 }
 
-# Input selection. The STR-DN840's front-panel input names map to these codes;
-# the labels are what Home Assistant shows in the source list.
+# Input selection.
+#
+# The source names come from the receiver itself, via
+# ``/cers/getSystemInformation`` -- these are exactly the strings an STR-DN840
+# reports in its ``supportSource`` list, so they match what the receiver echoes
+# back as the active source and can be compared directly.
 INPUT_CODES: Final[dict[str, str]] = {
-    "BD/DVD": "AAAAAgAAADAAAABzAw==",
-    "Game": "AAAAAgAAADAAAAB6Aw==",
-    "Sat/CATV": "AAAAAgAAADAAAAB0Aw==",
-    "Video": "AAAAAgAAADAAAABsAw==",
-    "TV": "AAAAAgAAADAAAABsAw==",
+    "BD": "AAAAAgAAADAAAABzAw==",
+    "DVD": "AAAAAgAAADAAAABxAw==",
+    "GAME": "AAAAAgAAADAAAAB6Aw==",
+    "SAT/CATV": "AAAAAgAAADAAAAB0Aw==",
+    "VIDEO": "AAAAAgAAADAAAABsAw==",
+    "TV": "AAAAAgAAADAAAAB1Aw==",
     "SA-CD/CD": "AAAAAgAAADAAAABuAw==",
-    "FM Tuner": "AAAAAgAAADAAAABpAw==",
-    "AM Tuner": "AAAAAgAAADAAAABqAw==",
+    "TUNER": "AAAAAgAAADAAAABpAw==",
     "USB": "AAAAAgAAADAAAAB5Aw==",
-    "Home Network": "AAAAAgAAADAAAAB7Aw==",
-    "Music Services": "AAAAAgAAADAAAAB8Aw==",
-    "Bluetooth": "AAAAAgAAADAAAAB9Aw==",
+    "AirPlay": "AAAAAgAAADAAAAB-Aw==",
+    "HOME NETWORK": "AAAAAgAAADAAAAB7Aw==",
+    "SEN": "AAAAAgAAADAAAAB8Aw==",
+    "BLUETOOTH": "AAAAAgAAADAAAAB9Aw==",
 }

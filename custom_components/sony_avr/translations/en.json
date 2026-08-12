@@ -23,7 +23,8 @@
     "error": {
       "cannot_connect": "Could not reach the receiver. Check the IP address and that it is powered on.",
       "cannot_register": "The receiver refused the pairing request.",
-      "invalid_auth": "That PIN was not accepted. Try again."
+      "invalid_auth": "That PIN was not accepted. Try again.",
+      "pairing_mode_required": "The receiver refused the pairing request. On the receiver, open Settings > Network > Device Registration, choose to add a device, then submit this form again."
     },
     "abort": {
       "already_configured": "This receiver is already set up."

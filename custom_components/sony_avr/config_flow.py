@@ -24,6 +24,7 @@ from .const import (
 from .sony import (
     AuthResult,
     CannotConnect,
+    PairingModeRequired,
     SonyAvrClient,
     generate_device_id,
 )
@@ -75,6 +76,8 @@ class SonyAvrConfigFlow(ConfigFlow, domain=DOMAIN):
 
             try:
                 result = await client.async_register()
+            except PairingModeRequired:
+                errors["base"] = "pairing_mode_required"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             else:
